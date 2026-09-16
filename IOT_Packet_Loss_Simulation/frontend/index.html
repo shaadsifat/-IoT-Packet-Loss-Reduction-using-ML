@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Router Loss Bench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <span class="eyebrow">No Protection · Math Rule · Math + ML</span>
+      <h1>Router Loss Bench</h1>
+      <p>Simulates a router sending packets to 7 IoT devices. Each batch fixes one shared sequence of send conditions, so all three strategies can be run against the exact same traffic and compared fairly.</p>
+    </div>
+  </header>
+
+  <section class="panel panel-pad" id="modelInfoPanel" style="display:none;">
+    <h2 class="section-title">Random Forest model</h2>
+    <div id="modelInfoBody"></div>
+  </section>
+
+  <section class="panel panel-pad">
+    <h2 class="section-title">1. Batch</h2>
+    <p class="section-sub">A batch is one fixed sequence of packet sends to all 7 devices. Create it once, then run each strategy against it.</p>
+    <div class="batch-row">
+      <div class="field">
+        <label for="batchName">Batch name</label>
+        <input type="text" id="batchName" placeholder="e.g. Evening load test" maxlength="60">
+      </div>
+      <div class="field">
+        <label for="packetCount">Packets to send per device</label>
+        <input type="number" id="packetCount" min="10" max="20000" step="10" value="500">
+      </div>
+      <div class="spacer"></div>
+      <button class="primary" id="createBatchBtn">Create fresh batch</button>
+    </div>
+    <div class="batch-list" id="batchList"></div>
+  </section>
+
+  <section class="panel panel-pad" id="runnerSection" style="display:none;">
+    <h2 class="section-title">2. Run a strategy on this batch</h2>
+    <p class="section-sub" id="runnerSub"></p>
+
+    <div class="field" style="margin-bottom:14px;">
+      <label for="speed">Send pacing</label>
+      <div class="speed-row" style="width:320px;">
+        <input type="range" id="speed" min="0" max="120" value="15">
+        <span class="speedval" id="speedVal">15 ms / packet</span>
+      </div>
+    </div>
+
+    <div class="strategy-runners" id="runnersGrid"></div>
+  </section>
+
+  <section id="resultsSection" style="display:none;">
+    <div class="summary-grid" id="summaryGrid"></div>
+  </section>
+
+  <section class="panel panel-pad" id="chartSection" style="display:none;">
+    <h2 class="section-title">Loss rate by device</h2>
+    <p class="section-sub">All strategies that have been run on this batch, per device</p>
+    <div id="deviceChart"></div>
+  </section>
+
+  <section class="panel panel-pad" id="deviceSection" style="display:none;">
+    <h2 class="section-title">Devices</h2>
+    <div class="device-grid" id="deviceGrid"></div>
+  </section>
+
+  <section class="panel panel-pad" id="logSection" style="display:none;">
+    <h2 class="section-title">Packet log</h2>
+    <div class="col-legend">
+      <span><i class="g-pre"></i>Sent (pre-send, fixed by the batch)</span>
+      <span><i class="g-decision"></i>Live decision (computed at send time)</span>
+      <span><i class="g-post"></i>Received (only known once the packet resolves)</span>
+    </div>
+    <div class="filterbar">
+      <select id="fStrategy">
+        <option value="all">All strategies</option>
+        <option value="baseline">No protection</option>
+        <option value="math">Mathematical analysis</option>
+        <option value="math_ai">Mathematical analysis + ML</option>
+      </select>
+      <select id="fDevice"><option value="all">All devices</option></select>
+      <select id="fOutcome">
+        <option value="all">All outcomes</option>
+        <option value="lost">Lost only</option>
+        <option value="ok">Delivered only</option>
+      </select>
+      <span class="count" id="rowCount"></span>
+    </div>
+    <div class="table-scroll">
+      <table id="logTable">
+        <thead><tr id="headRow"></tr></thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+    <div class="pagebar">
+      <button class="ghost" id="prevPage">&larr; Prev</button>
+      <span id="pageInfo"></span>
+      <button class="ghost" id="nextPage">Next &rarr;</button>
+    </div>
+    <div class="export-row" id="exportRow"></div>
+    <p class="foot-note">Pre-send columns are generated the instant before each packet leaves the router; post-send columns (state, dbytes, sloss, dloss, packet_lost) reflect what actually happened. "Action" is the Stage-1 rule's decision for that packet's Spkts/sttl zone — always <span class="mono">NONE</span> under no-protection. "model_risk_pct" is only populated when the Random Forest actually refined that packet's risk (zones MODERATE and up, under Math + ML).</p>
+  </section>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>

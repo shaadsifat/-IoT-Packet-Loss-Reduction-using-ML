@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.venv/
+backend/data/batches/*.json
+backend/data/results/*.json

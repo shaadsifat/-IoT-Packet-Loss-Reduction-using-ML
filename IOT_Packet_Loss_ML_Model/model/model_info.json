@@ -1,0 +1,53 @@
+{
+  "model_type": "RandomForestClassifier (scikit-learn Pipeline)",
+  "exported_at_utc": "2026-09-16T09:10:47.743653+00:00",
+  "sklearn_version": "1.9.0",
+  "python_version": "3.12.10",
+  "feature_columns": [
+    "smeansz",
+    "ct_state_ttl",
+    "ct_srv_src",
+    "ct_srv_dst",
+    "ct_dst_ltm",
+    "ct_src_ltm",
+    "ct_src_dport_ltm",
+    "ct_dst_sport_ltm",
+    "ct_dst_src_ltm",
+    "dst_port_bucket"
+  ],
+  "categorical_columns": [
+    "dst_port_bucket"
+  ],
+  "numeric_columns": [
+    "smeansz",
+    "ct_state_ttl",
+    "ct_srv_src",
+    "ct_srv_dst",
+    "ct_dst_ltm",
+    "ct_src_ltm",
+    "ct_src_dport_ltm",
+    "ct_dst_sport_ltm",
+    "ct_dst_src_ltm"
+  ],
+  "hyperparameters": {
+    "n_estimators": 200,
+    "max_depth": 5,
+    "class_weight": "balanced",
+    "random_state": 42
+  },
+  "training_rows": 1235648,
+  "test_rows": 411883,
+  "test_accuracy_pct": 93.67,
+  "test_macro_f1": 0.9273,
+  "test_confusion_matrix": [
+    [
+      119020,
+      3260
+    ],
+    [
+      22815,
+      266788
+    ]
+  ],
+  "notes": "Trained on IOT_Packet_Loss_ML_Model/unsw_cleaned_features.csv. Predicts packet_lost probability from 10 pre-send-safe features only - see notebooks 03-04 for why Spkts/sbytes/sttl/swin/proto/service were excluded."
+}
