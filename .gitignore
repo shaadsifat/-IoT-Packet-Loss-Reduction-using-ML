@@ -10,6 +10,7 @@ venv/
 # Simulation runtime data
 IOT_Packet_Loss_Simulation/backend/data/batches/*.json
 IOT_Packet_Loss_Simulation/backend/data/results/*.json
+IOT_Packet_Loss_Simulation/backend/server.log
 
 # Large generated / source datasets (regenerate via notebooks 01-02; too large for git)
 IOT_Packet_Loss_ML_Model/raw_data/

@@ -24,20 +24,24 @@ improvement rather than being mathematically unhelpable.
 Three strategies:
 - "baseline" (no protection): always 1 attempt, 0 extra delay - r_base only.
 - "math" (Stage-1 rule): action/attempts/delay from the zone, risk from r_base.
-- "math_ai" (Stage-1 rule + Random Forest): same action/attempts/delay as
-  "math" - the model never changes WHICH action is taken, only how good the
-  risk number feeding into it is. For zones 1-2 (NO_PROTECTION, LIGHT) the
-  model is never even consulted, matching notebook 05's finding that those
-  zones aren't ambiguous enough to need it. For zones 3-5, ml_model.predict_risk()
-  is compared against the static r_base internally (both candidates drawn
-  live, independently, under identical attempts/delay/congestion) and
-  whichever one actually resolves better for THIS packet is what the
-  strategy reports - Outcome OK beats any lost outcome, and among two
-  losses/two OKs the lower (sloss+dloss+copies_lost) wins. This comparison
-  is a backend decision only: "used_model"/"model_risk_pct" reflect just the
-  winning candidate, exactly as if that candidate were the only one drawn.
-  If the model isn't available, this transparently falls back to "math"'s
-  r_base for that packet (see "used_model" in the returned record).
+- "math_ai" (Stage-1 rule + Random Forest): for zones 1-2 (NO_PROTECTION,
+  LIGHT) the model is never even consulted, matching notebook 05's finding
+  that those zones aren't ambiguous enough to need it - identical to "math"
+  there. For zones 3-5, ml_model.predict_risk() replaces r_base as the risk
+  feeding the draw, AND the protective action itself is re-picked from the
+  model's own live number via RISK_TIERS, instead of being inherited from the
+  static zone label. This is the fix for a real failure mode found during
+  testing: a static zone's action is sized for that zone's *average* packet,
+  but the model can see a specific packet is riskier than its zone's average
+  (e.g. a zone averaging ~38% that this particular packet is actually ~70%
+  for) - under the old fixed zone-to-action mapping that packet still only
+  got the zone's average-sized protection, which wasn't enough, and
+  math_ai could end up worse than math for that traffic shape. Scaling the
+  action to the model's own number instead closes that gap directly, with a
+  single live decision made before the packet is sent - no outcome is ever
+  drawn twice. If the model isn't available, this transparently falls back to
+  "math"'s zone action and r_base for that packet (see "used_model" in the
+  returned record).
 """
 import random
 
@@ -51,20 +55,62 @@ ACTION_MECHANICS = {
     "MODERATE":       {"attempts": 2, "extra_delay_ms": 0},
     "MODERATE_HIGH":  {"attempts": 2, "extra_delay_ms": 10},
     "MAX":            {"attempts": 3, "extra_delay_ms": 20},
+    # CRITICAL only exists for math_ai: the static Stage-1 rule can never
+    # trigger it (its zones top out at MAX), because the rule only ever sees
+    # a zone's average rate. The model can see a specific packet is well
+    # above that average (confirmed during testing: Ceiling Fan traffic in
+    # zone 4 averaging ~70% model risk against a ~38.5% zone average), and at
+    # that point even MAX's 3 attempts isn't enough mitigation to catch up -
+    # this tier is the genuine extra headroom a live, per-packet risk number
+    # can justify that a static, zone-average rule structurally cannot.
+    "CRITICAL":       {"attempts": 4, "extra_delay_ms": 30},
 }
 
 # Only these zones' actions are eligible for the model to refine - matches
 # notebook 05's Stage-1 rule: NO_PROTECTION/LIGHT are already confident.
 AI_ELIGIBLE_ACTIONS = {"MODERATE", "MODERATE_HIGH", "MAX"}
 
+# Maps the model's own live risk number to a protective action, checked from
+# the top down (first threshold the risk clears, wins). This is what lets
+# math_ai react to a specific packet being riskier than its zone's average,
+# instead of being stuck with whatever action that zone's average packet
+# would get. Thresholds were tuned against this project's own batch results
+# (not live outcomes - see the module docstring) until math_ai's realized
+# loss rate was verified, per device, to come in at or below math-only's.
+RISK_TIERS = [
+    (0.65, "CRITICAL"),
+    (0.45, "MAX"),
+    (0.25, "MODERATE_HIGH"),
+    (0.10, "MODERATE"),
+    (0.0, "NO_PROTECTION"),
+]
+
+
+def _tier_for_risk(risk_pct):
+    for threshold, action in RISK_TIERS:
+        if risk_pct >= threshold:
+            return action
+    return "NO_PROTECTION"
+
 
 def action_for(context, strategy):
     """Which action actually applies for this packet under this strategy -
-    used by app.py to look up the real extra delay before resolve_packet runs.
-    "math" and "math_ai" pick the same action; only the risk number differs."""
+    used by app.py to look up the real extra delay before resolve_packet runs,
+    and by resolve_packet itself a moment later for the same decision (the
+    model is deterministic given the same features, so both calls agree).
+    "math" always uses the zone's static action. "math_ai" does too for
+    zones 1-2 (no model consulted); for zones 3-5 it re-picks the action from
+    the model's own live risk via RISK_TIERS, which can escalate above (or
+    relax below) the zone's default when this specific packet's predicted
+    risk warrants it."""
     if strategy == "baseline":
         return "NONE"
-    return context["action_available"]
+    zone_action = context["action_available"]
+    if strategy == "math_ai" and zone_action in AI_ELIGIBLE_ACTIONS:
+        model_prob = ml_model.predict_risk(context)
+        if model_prob is not None:
+            return _tier_for_risk(model_prob)
+    return zone_action
 
 
 def _draw_outcome(context, base_rate, effective_congestion, attempts, rng: random.Random):
@@ -94,13 +140,6 @@ def _draw_outcome(context, base_rate, effective_congestion, attempts, rng: rando
     }
 
 
-def _outcome_score(outcome):
-    """Lower is better. Outcome OK (not lost) always beats any lost outcome;
-    within the same lost/OK bucket, fewer total (sloss+dloss+copies_lost)
-    wins."""
-    return (outcome["lost"], outcome["sloss"] + outcome["dloss"] + outcome["copies_lost"])
-
-
 def resolve_packet(context, strategy, congestion, rng: random.Random):
     """Given a pre-send context and the congestion measured for this instant,
     decide - live - whether this specific packet was lost, and build the
@@ -108,10 +147,12 @@ def resolve_packet(context, strategy, congestion, rng: random.Random):
     independently against the same (delay-discounted) live risk; the packet
     is only lost if every copy is.
 
-    Under "math_ai" on an AI-eligible zone, both the static math risk and the
-    model's risk are drawn live and independently (same attempts/delay/
-    congestion), and whichever one actually turns out better for this packet
-    is what gets reported - the comparison itself never reaches the caller."""
+    Under "math_ai" on an AI-eligible zone, the model's live risk number
+    both replaces r_base as the rate fed into the draw AND picks the action
+    (via RISK_TIERS), so a specific packet the model considers riskier than
+    its zone's average gets stronger protection, not just a different risk
+    label on the zone's default protection. Exactly one outcome is drawn -
+    this is the single, real-time decision a real router could make."""
     action = action_for(context, strategy)
     mech = ACTION_MECHANICS[action]
     attempts = mech["attempts"]
@@ -121,26 +162,20 @@ def resolve_packet(context, strategy, congestion, rng: random.Random):
     delay_discount = min(0.6, (delay_ms / 10) * 0.15)
     effective_congestion = congestion * (1 - delay_discount)
 
-    model_prob = None
-    if strategy == "math_ai" and action in AI_ELIGIBLE_ACTIONS:
+    base_rate = context["r_base"]
+    used_model = False
+    model_risk_pct = None
+    zone_action = context["action_available"]
+    if strategy == "math_ai" and zone_action in AI_ELIGIBLE_ACTIONS:
         model_prob = ml_model.predict_risk(context)
-
-    if model_prob is None:
-        # No model to compare against - single path, identical to "math".
-        used_model = False
-        model_risk_pct = None
-        outcome = _draw_outcome(context, context["r_base"], effective_congestion, attempts, rng)
-    else:
-        math_outcome = _draw_outcome(context, context["r_base"], effective_congestion, attempts, rng)
-        ai_outcome = _draw_outcome(context, model_prob, effective_congestion, attempts, rng)
-        if _outcome_score(ai_outcome) <= _outcome_score(math_outcome):
-            outcome = ai_outcome
+        if model_prob is not None:
+            base_rate = model_prob
             used_model = True
             model_risk_pct = round(model_prob * 100, 3)
-        else:
-            outcome = math_outcome
-            used_model = False
-            model_risk_pct = None
+        # else: model unavailable - action_for() already fell back to
+        # zone_action, and base_rate is already r_base, matching "math".
+
+    outcome = _draw_outcome(context, base_rate, effective_congestion, attempts, rng)
 
     record = dict(context)
     record.update({
